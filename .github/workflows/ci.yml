@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: rems
+          POSTGRES_PASSWORD: rems_dev_pw
+          POSTGRES_DB: rems_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rems"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Generate Prisma client
+        run: npm run db:generate --workspace server
+
+      - name: Server tests (integration, against Postgres)
+        run: npm test --workspace server
+        env:
+          # The server test script points DATABASE_URL at rems_test on localhost.
+          CI: 'true'
+
+      - name: Build client
+        run: npm run build --workspace client
+
+      - name: Build Docker images
+        run: |
+          docker build -f server/Dockerfile -t rems-server .
+          docker build -f client/Dockerfile -t rems-web .

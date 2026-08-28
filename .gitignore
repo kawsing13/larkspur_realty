@@ -1,0 +1,39 @@
+# dependencies
+node_modules/
+
+# builds
+dist/
+build/
+client/dist/
+
+# env / secrets
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# database backups
+backups/
+
+# logs
+*.log
+npm-debug.log*
+
+# test / coverage
+coverage/
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# vite / prisma local
+.vite/
+server/prisma/*.db
+server/prisma/*.db-journal
+
+# external design reference used while building (not part of this codebase);
+# the resulting design system is documented in CLAUDE.md section 7
+front-end-skill.md
+taste-skill.md

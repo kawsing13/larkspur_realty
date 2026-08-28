@@ -1,0 +1,50 @@
+{
+  "name": "server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "nodemon --watch src --watch prisma/schema.prisma src/server.js",
+    "start": "node src/server.js",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:reset": "prisma migrate reset --force",
+    "db:seed": "node prisma/seed.js",
+    "db:studio": "prisma studio",
+    "db:generate": "prisma generate",
+    "lint": "eslint src prisma test",
+    "test:db:migrate": "cross-env DATABASE_URL=postgresql://rems:rems_dev_pw@localhost:5432/rems_test?schema=public prisma migrate deploy",
+    "test:db:seed": "cross-env DATABASE_URL=postgresql://rems:rems_dev_pw@localhost:5432/rems_test?schema=public node prisma/seed.js --reset",
+    "pretest": "npm run test:db:migrate && npm run test:db:seed",
+    "test": "cross-env NODE_ENV=test DATABASE_URL=postgresql://rems:rems_dev_pw@localhost:5432/rems_test?schema=public node --test \"test/**/*.test.js\""
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
+  },
+  "dependencies": {
+    "@node-rs/argon2": "^2.0.2",
+    "@prisma/client": "^6.3.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "minio": "^8.0.4",
+    "multer": "^2.0.1",
+    "pdfkit": "^0.15.2",
+    "pino": "^9.6.0",
+    "pino-http": "^10.4.0",
+    "swagger-ui-express": "^5.0.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "eslint": "^9.20.1",
+    "nodemon": "^3.1.9",
+    "pino-pretty": "^13.0.0",
+    "prisma": "^6.3.1"
+  }
+}

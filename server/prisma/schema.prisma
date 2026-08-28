@@ -1,0 +1,607 @@
+// Prisma schema - the single source of truth for the database.
+//
+// Conventions:
+//   - Models are PascalCase singular; Prisma maps them to tables of the same name.
+//   - Money is Decimal, never Float.
+//   - Nothing a human might need back is hard-deleted; use a `status` enum instead.
+//   - Columns the /api/search endpoint filters or sorts on are indexed (see @@index).
+//
+// After editing this file run:  npm run db:migrate
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+//  Access control: users, roles, permissions, sessions
+// ============================================================
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  INVITED
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  phone        String?
+  status       UserStatus @default(ACTIVE)
+  lastLoginAt  DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  roles         UserRole[]
+  agent         Agent?
+  customer      Customer?
+  refreshTokens RefreshToken[]
+  notifications Notification[]
+
+  // back-relations for "who did this" fields elsewhere
+  auditLogs        AuditLog[]         @relation("AuditActor")
+  inquiryNotes     InquiryNote[]
+  uploadedDocs     PropertyDocument[] @relation("DocUploader")
+  createdProperties Property[]        @relation("PropertyCreatedBy")
+  leadsAssignedByMe LeadAssignment[]  @relation("LeadAssignedBy")
+  listingsSubmitted     Listing[]              @relation("ListingSubmitter")
+  listingsReviewed      Listing[]              @relation("ListingReviewer")
+  listingHistoryChanges ListingStatusHistory[] @relation("ListingHistoryActor")
+
+  @@index([status])
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique // SUPER_ADMIN, ADMINISTRATOR, AGENT, PROPERTY_MANAGER, CUSTOMER
+  description String?
+  createdAt   DateTime @default(now())
+
+  users       UserRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique // e.g. "property:create", "listing:approve"
+  description String?
+
+  roles RolePermission[]
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+// Refresh tokens are stored as a SHA-256 hash. The raw token only ever lives in the
+// client's httpOnly cookie, so a database leak cannot be replayed as a login.
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?
+  ip        String?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// ============================================================
+//  Organization / branch, agents, customers
+// ============================================================
+
+model Organization {
+  id           String   @id @default(cuid())
+  name         String
+  slug         String   @unique
+  email        String?
+  phone        String?
+  addressLine1 String?
+  city         String?
+  state        String?
+  postalCode   String?
+  country      String?
+  timezone     String   @default("UTC")
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  agents     Agent[]
+  properties Property[]
+}
+
+enum AgentStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Agent {
+  id             String       @id @default(cuid())
+  userId         String       @unique
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  licenseNumber  String?
+  title          String? // "Senior Agent"
+  bio            String?
+  photoUrl       String?
+  status         AgentStatus  @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  properties      Property[]       @relation("ListingAgent")
+  leadAssignments LeadAssignment[]
+  appointments    Appointment[]
+  assignedInquiries Inquiry[]      @relation("InquiryAssignedAgent")
+
+  @@index([organizationId])
+  @@index([status])
+}
+
+model Customer {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone            String?
+  preferredContact String? // "email" | "phone"
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  inquiries     Inquiry[]
+  favorites     Favorite[]
+  savedSearches SavedSearch[]
+  appointments  Appointment[]
+}
+
+// ============================================================
+//  Properties and their attributes
+// ============================================================
+
+model PropertyType {
+  id         String     @id @default(cuid())
+  name       String     @unique // House, Condominium, Apartment, Townhouse, Land, Commercial
+  slug       String     @unique
+  properties Property[]
+}
+
+model Amenity {
+  id         String            @id @default(cuid())
+  name       String            @unique
+  slug       String            @unique
+  category   String? // "Interior", "Exterior", "Community"
+  properties PropertyAmenity[]
+}
+
+enum ListingMode {
+  SALE
+  RENT
+}
+
+// Quick-filter state used by the public search endpoint. The detailed approval
+// workflow lives on Listing.status below; this mirrors the end result.
+enum PropertyStatus {
+  DRAFT
+  PENDING_REVIEW
+  CHANGES_REQUESTED
+  PUBLISHED
+  UNPUBLISHED
+  ARCHIVED
+  SOLD
+  RENTED
+}
+
+model Property {
+  id             String         @id @default(cuid())
+  reference      String         @unique // human code, e.g. "RE-2026-0184"
+  title          String
+  description    String
+  propertyTypeId String
+  propertyType   PropertyType   @relation(fields: [propertyTypeId], references: [id])
+  listingMode    ListingMode
+  status         PropertyStatus @default(DRAFT)
+  price          Decimal        @db.Decimal(14, 2)
+  currency       String         @default("USD")
+
+  bedrooms     Int?
+  bathrooms    Int?
+  floorAreaSqm Decimal? @db.Decimal(10, 2)
+  lotAreaSqm   Decimal? @db.Decimal(10, 2)
+  yearBuilt    Int?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  agentId        String?
+  agent          Agent?       @relation("ListingAgent", fields: [agentId], references: [id])
+  createdById    String?
+  createdBy      User?        @relation("PropertyCreatedBy", fields: [createdById], references: [id])
+  // staff "my properties" queries filter on createdById as well as agentId
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  publishedAt DateTime?
+
+  location     PropertyLocation?
+  images       PropertyImage[]
+  amenities    PropertyAmenity[]
+  documents    PropertyDocument[]
+  listing      Listing?
+  inquiries    Inquiry[]
+  favorites    Favorite[]
+  appointments Appointment[]
+
+  @@index([status])
+  @@index([listingMode])
+  @@index([propertyTypeId])
+  @@index([price])
+  @@index([bedrooms])
+  @@index([organizationId])
+  @@index([agentId])
+  @@index([createdById])
+}
+
+model PropertyLocation {
+  id               String   @id @default(cuid())
+  propertyId       String   @unique
+  property         Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  addressLine1     String?
+  addressLine2     String?
+  city             String
+  state            String?
+  postalCode       String?
+  country          String   @default("USA")
+  neighborhood     String?
+  latitude         Decimal? @db.Decimal(9, 6)
+  longitude        Decimal? @db.Decimal(9, 6)
+  formattedAddress String?
+
+  @@index([city])
+  @@index([state])
+}
+
+model PropertyImage {
+  id         String   @id @default(cuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  url        String
+  storageKey String? // object-store key, kept so the file can be deleted later
+  caption    String?
+  sortOrder  Int      @default(0)
+  isCover    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([propertyId])
+}
+
+enum DocumentType {
+  BROCHURE
+  FLOOR_PLAN
+  PERMIT
+  TITLE
+  OTHER
+}
+
+enum DocumentVisibility {
+  PRIVATE // staff on the owning organization only
+  AGENTS // any authenticated agent or admin
+  PUBLIC // downloadable from the public listing page
+}
+
+model PropertyDocument {
+  id           String             @id @default(cuid())
+  propertyId   String
+  property     Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  title        String
+  docType      DocumentType       @default(OTHER)
+  visibility   DocumentVisibility @default(PRIVATE)
+  // Downloads always go through an access-checked route; storageKey is never a public URL.
+  storageKey   String
+  fileName     String
+  mimeType     String
+  sizeBytes    Int
+  uploadedById String?
+  uploadedBy   User?              @relation("DocUploader", fields: [uploadedById], references: [id])
+  createdAt    DateTime           @default(now())
+
+  @@index([propertyId])
+}
+
+model PropertyAmenity {
+  propertyId String
+  amenityId  String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  amenity    Amenity  @relation(fields: [amenityId], references: [id], onDelete: Cascade)
+
+  @@id([propertyId, amenityId])
+}
+
+// ============================================================
+//  Listing workflow: draft -> review -> publish
+// ============================================================
+
+enum ListingStatus {
+  DRAFT
+  PENDING_REVIEW
+  CHANGES_REQUESTED
+  PUBLISHED
+  UNPUBLISHED
+  ARCHIVED
+  CLOSED_SOLD
+  CLOSED_RENTED
+}
+
+model Listing {
+  id            String        @id @default(cuid())
+  propertyId    String        @unique
+  property      Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  status        ListingStatus @default(DRAFT)
+  headline      String? // optional marketing headline; falls back to property.title
+  submittedById String?
+  submittedBy   User?         @relation("ListingSubmitter", fields: [submittedById], references: [id])
+  submittedAt   DateTime?
+  reviewedById  String?
+  reviewedBy    User?         @relation("ListingReviewer", fields: [reviewedById], references: [id])
+  reviewedAt    DateTime?
+  reviewNotes   String? // the note from the last "request changes"
+  publishedAt   DateTime?
+  closedAt      DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  statusHistory ListingStatusHistory[]
+
+  @@index([status])
+}
+
+model ListingStatusHistory {
+  id          String         @id @default(cuid())
+  listingId   String
+  listing     Listing        @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  fromStatus  ListingStatus?
+  toStatus    ListingStatus
+  changedById String?
+  changedBy   User?          @relation("ListingHistoryActor", fields: [changedById], references: [id])
+  note        String?
+  createdAt   DateTime       @default(now())
+
+  @@index([listingId])
+}
+
+// ============================================================
+//  Inquiries and lead management (CRM)
+// ============================================================
+
+enum InquirySource {
+  WEBSITE
+  PHONE
+  EMAIL
+  REFERRAL
+  WALK_IN
+  OTHER
+}
+
+// Lead lifecycle from the brief:
+// NEW -> CONTACTED -> QUALIFIED -> VIEWING_SCHEDULED -> NEGOTIATION -> WON | LOST
+enum InquiryStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  VIEWING_SCHEDULED
+  NEGOTIATION
+  WON
+  LOST
+}
+
+model Inquiry {
+  id         String    @id @default(cuid())
+  propertyId String
+  property   Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+
+  // Captured even when the person is not signed in.
+  name    String
+  email   String
+  phone   String?
+  message String
+
+  source          InquirySource @default(WEBSITE)
+  status          InquiryStatus @default(NEW)
+  assignedAgentId String?
+  assignedAgent   Agent?        @relation("InquiryAssignedAgent", fields: [assignedAgentId], references: [id])
+  followUpDate    DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  notes        InquiryNote[]
+  assignments  LeadAssignment[]
+  appointments Appointment[]
+
+  @@index([status, createdAt])
+  @@index([assignedAgentId])
+  @@index([propertyId])
+  @@index([customerId])
+  @@index([followUpDate])
+}
+
+// Doubles as the lead's interaction timeline: agent-written notes plus automatic
+// entries for status changes and assignments (`kind` says which).
+enum InquiryNoteKind {
+  NOTE
+  STATUS_CHANGE
+  ASSIGNMENT
+}
+
+model InquiryNote {
+  id        String          @id @default(cuid())
+  inquiryId String
+  inquiry   Inquiry         @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  authorId  String?
+  author    User?           @relation(fields: [authorId], references: [id])
+  kind      InquiryNoteKind @default(NOTE)
+  body      String
+  createdAt DateTime        @default(now())
+
+  @@index([inquiryId])
+}
+
+model LeadAssignment {
+  id           String    @id @default(cuid())
+  inquiryId    String
+  inquiry      Inquiry   @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  agentId      String
+  agent        Agent     @relation(fields: [agentId], references: [id])
+  assignedById String?
+  assignedBy   User?     @relation("LeadAssignedBy", fields: [assignedById], references: [id])
+  assignedAt   DateTime  @default(now())
+  unassignedAt DateTime?
+  reason       String?
+
+  @@index([inquiryId])
+  @@index([agentId])
+}
+
+// ============================================================
+//  Appointments / property viewings
+// ============================================================
+
+enum AppointmentStatus {
+  REQUESTED
+  CONFIRMED
+  RESCHEDULED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+model Appointment {
+  id         String    @id @default(cuid())
+  propertyId String
+  property   Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  inquiryId  String?
+  inquiry    Inquiry?  @relation(fields: [inquiryId], references: [id])
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+  agentId    String?
+  agent      Agent?    @relation(fields: [agentId], references: [id])
+
+  requestedStart DateTime
+  requestedEnd   DateTime?
+  confirmedStart DateTime?
+  confirmedEnd   DateTime?
+  status         AppointmentStatus @default(REQUESTED)
+
+  contactName  String
+  contactEmail String
+  contactPhone String?
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agentId])
+  @@index([propertyId])
+  @@index([customerId])
+  @@index([inquiryId])
+  @@index([status])
+  @@index([requestedStart])
+}
+
+// ============================================================
+//  Customer engagement: favorites, saved searches, notifications
+// ============================================================
+
+model Favorite {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([customerId, propertyId])
+  @@index([customerId])
+}
+
+model SavedSearch {
+  id             String    @id @default(cuid())
+  customerId     String
+  customer       Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  name           String
+  // The search filter, stored exactly as the search API accepts it.
+  criteria       Json
+  notifyByEmail  Boolean   @default(true)
+  lastRunAt      DateTime?
+  lastMatchCount Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([customerId])
+}
+
+enum NotificationType {
+  SAVED_SEARCH_MATCH
+  INQUIRY_ASSIGNED
+  APPOINTMENT_UPDATE
+  LISTING_STATUS
+  SYSTEM
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType @default(SYSTEM)
+  title     String
+  body      String
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, readAt])
+}
+
+// ============================================================
+//  Audit log
+// ============================================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id])
+  action     String // "listing.approved", "user.suspended", "lead.assigned", ...
+  entityType String // "Listing", "User", "Inquiry", "Property"
+  entityId   String?
+  summary    String
+  metadata   Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([createdAt])
+}

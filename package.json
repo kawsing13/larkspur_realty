@@ -1,0 +1,32 @@
+{
+  "name": "real-estate-management-system",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Real Estate Management & Property Listing Platform",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c green,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "npm run dev --workspace server",
+    "dev:client": "npm run dev --workspace client",
+    "build": "npm run build --workspace client",
+    "db:migrate": "npm run db:migrate --workspace server",
+    "db:reset": "npm run db:reset --workspace server",
+    "db:seed": "npm run db:seed --workspace server",
+    "db:studio": "npm run db:studio --workspace server",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.1",
+    "concurrently": "^9.1.2",
+    "eslint-plugin-react": "^7.37.4",
+    "globals": "^15.14.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
