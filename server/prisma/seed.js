@@ -299,6 +299,13 @@ const PROPERTIES = [
   },
 ];
 
+// Local demo photography, committed under client/public/demo/ and served by the
+// web app itself, so the demo needs no external image service. Random stock shots
+// (same idea as the old picsum URLs), cycled across the listings. Deterministic
+// per (property, slot) so a re-seed shows the same photo in the same place.
+const DEMO_PHOTO_COUNT = 20;
+const demoPhotoUrl = (n) => `/demo/${(n % DEMO_PHOTO_COUNT) + 1}.jpg`;
+
 // ==================================================================
 //  Runner
 // ==================================================================
@@ -411,7 +418,7 @@ async function seedProperties({ typeBySlug, amenityBySlug, organization, userByE
   const now = new Date();
   const reviewedBy = userByEmail['admin@demo.realestate']?.id ?? null;
 
-  for (const p of PROPERTIES) {
+  for (const [pIndex, p] of PROPERTIES.entries()) {
     const agentUser = userByEmail[p.agent];
     const agentId = agentUser?.agent?.id ?? null;
     const submittedBy = agentUser?.id ?? null;
@@ -466,8 +473,7 @@ async function seedProperties({ typeBySlug, amenityBySlug, organization, userByE
         },
         images: {
           create: [0, 1, 2].map((i) => ({
-            // Placeholder photography keyed by reference so each listing looks distinct.
-            url: `https://picsum.photos/seed/${p.reference.toLowerCase()}-${i}/1200/900`,
+            url: demoPhotoUrl(pIndex * 3 + i),
             caption: i === 0 ? 'Exterior' : i === 1 ? 'Living area' : 'Kitchen',
             sortOrder: i,
             isCover: i === 0,

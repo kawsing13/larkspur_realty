@@ -10,18 +10,28 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { Client } from 'minio';
 import { env } from '../config/env.js';
+import { ApiError } from './ApiError.js';
+
+const isMinio = env.STORAGE_PROVIDER === 'minio';
+// "none": no object storage in this deployment (the free Render deploy). Browsing
+// works from the seeded demo photos; anything that writes a file returns 501.
+const uploadsDisabled = env.STORAGE_PROVIDER === 'none';
+
+const noStorage = () =>
+  new ApiError(501, 'File uploads are disabled in this deployment');
 
 const endpoint = new URL(env.STORAGE_ENDPOINT);
-const isMinio = env.STORAGE_PROVIDER === 'minio';
 
-export const storage = new Client({
-  endPoint: endpoint.hostname,
-  port: Number(endpoint.port) || (endpoint.protocol === 'https:' ? 443 : 80),
-  useSSL: endpoint.protocol === 'https:',
-  region: env.STORAGE_REGION,
-  accessKey: env.STORAGE_ACCESS_KEY,
-  secretKey: env.STORAGE_SECRET_KEY,
-});
+export const storage = uploadsDisabled
+  ? null
+  : new Client({
+      endPoint: endpoint.hostname,
+      port: Number(endpoint.port) || (endpoint.protocol === 'https:' ? 443 : 80),
+      useSSL: endpoint.protocol === 'https:',
+      region: env.STORAGE_REGION,
+      accessKey: env.STORAGE_ACCESS_KEY,
+      secretKey: env.STORAGE_SECRET_KEY,
+    });
 
 const MEDIA_BUCKET = env.STORAGE_BUCKET;
 const DOCS_BUCKET = env.STORAGE_DOCS_BUCKET;
@@ -46,6 +56,8 @@ export const publicUrl = (key) => {
 // provider console and the media bucket is made public there, so we only verify
 // they are reachable and never send a bucket policy (R2 rejects the S3 policy API).
 export const ensureBuckets = async () => {
+  if (uploadsDisabled) return;
+
   for (const bucket of [MEDIA_BUCKET, DOCS_BUCKET]) {
     const exists = await storage.bucketExists(bucket);
     if (!exists) {
@@ -84,16 +96,20 @@ const IMAGE_EXT = {
 };
 
 export const putPropertyImage = async ({ propertyId, buffer, mimeType }) => {
+  if (uploadsDisabled) throw noStorage();
   const key = `properties/${propertyId}/${crypto.randomUUID()}.${IMAGE_EXT[mimeType] || 'bin'}`;
   await storage.putObject(MEDIA_BUCKET, key, buffer, buffer.length, { 'Content-Type': mimeType });
   return { key, url: publicUrl(key) };
 };
 
-export const removeObject = (key) => storage.removeObject(MEDIA_BUCKET, key);
+// No-op when storage is off, so deleting a property/image row still succeeds.
+export const removeObject = (key) =>
+  uploadsDisabled ? Promise.resolve() : storage.removeObject(MEDIA_BUCKET, key);
 
 // ---- documents (private) ----
 
 export const putDocument = async ({ propertyId, buffer, mimeType, fileName }) => {
+  if (uploadsDisabled) throw noStorage();
   const ext = path.extname(fileName || '').slice(0, 10) || '';
   const key = `properties/${propertyId}/${crypto.randomUUID()}${ext}`;
   await storage.putObject(DOCS_BUCKET, key, buffer, buffer.length, { 'Content-Type': mimeType });
@@ -101,6 +117,10 @@ export const putDocument = async ({ propertyId, buffer, mimeType, fileName }) =>
 };
 
 // Returns a readable stream of the object, for the download proxy.
-export const getDocumentStream = (key) => storage.getObject(DOCS_BUCKET, key);
+export const getDocumentStream = (key) => {
+  if (uploadsDisabled) throw noStorage();
+  return storage.getObject(DOCS_BUCKET, key);
+};
 
-export const removeDocument = (key) => storage.removeObject(DOCS_BUCKET, key);
+export const removeDocument = (key) =>
+  uploadsDisabled ? Promise.resolve() : storage.removeObject(DOCS_BUCKET, key);

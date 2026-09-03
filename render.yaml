@@ -5,17 +5,20 @@
 #   larkspur-api   the Express API (built from server/Dockerfile)
 #   larkspur-web   the built React SPA, served as a static site
 #
-# Object storage is NOT on Render (Render has no S3). Create two buckets on an
-# S3-compatible provider (Cloudflare R2 recommended) and fill the STORAGE_* values
-# marked "sync: false" below. See docs/DEPLOYMENT.md -> "Deploying to Render".
+# This deploy runs WITHOUT object storage (STORAGE_PROVIDER=none). Browsing works
+# from the seeded demo photos (committed under client/public/demo/); the agent
+# "upload photo" and property-document endpoints return 501. To enable real
+# uploads later, switch STORAGE_PROVIDER to "s3" and add the STORAGE_* values for
+# a bucket provider - see docs/DEPLOYMENT.md.
 #
 # First run:
-#   1. Create the R2 buckets + an API token (see the docs).
-#   2. In Render: New -> Blueprint -> pick this repo. It reads this file.
-#   3. Set the handful of values Render prompts for (the sync:false ones).
-#   4. After the first deploy, open the API service shell and run:
+#   1. In Render: New -> Blueprint -> pick this repo. It reads this file.
+#   2. After the first deploy, set the two cross-reference URLs (CLIENT_ORIGIN on
+#      the API, VITE_API_BASE_URL on the web service) and redeploy the web service.
+#   3. Open the API service shell and run:
 #        node server/prisma/scripts/seed-rbac.js
 #        node server/prisma/scripts/create-admin.js you@example.com "a strong password" Ada Lovelace
+#      Optionally load the demo listings:  npm run db:seed --workspace server
 #      (migrations run automatically on every deploy - see dockerCommand.)
 
 databases:
@@ -70,28 +73,12 @@ services:
       # full URL of larkspur-web, e.g. https://larkspur-web.onrender.com
       - key: CLIENT_ORIGIN
         sync: false
-      # ---- object storage (Cloudflare R2 / AWS S3) ----
+      # No object storage in this deploy. See the header comment.
       - key: STORAGE_PROVIDER
-        value: s3
-      - key: STORAGE_REGION
-        value: auto # "auto" for R2; the real region for AWS S3
-      - key: STORAGE_BUCKET
-        value: larkspur-media
-      - key: STORAGE_DOCS_BUCKET
-        value: larkspur-docs
-      # R2: https://<accountid>.r2.cloudflarestorage.com
-      - key: STORAGE_ENDPOINT
-        sync: false
-      - key: STORAGE_ACCESS_KEY
-        sync: false
-      - key: STORAGE_SECRET_KEY
-        sync: false
-      # Public base URL for the media bucket (R2 "Public Development URL" like
-      # https://pub-xxxx.r2.dev, or a custom domain). The key is appended directly.
-      - key: STORAGE_PUBLIC_URL
-        sync: false
+        value: none
+      # Optional: paste a Mapbox token to get the interactive map on listings.
       - key: MAPBOX_TOKEN
-        sync: false
+        value: ""
 
   # ---- Frontend (static SPA) --------------------------------------------------
   - type: web

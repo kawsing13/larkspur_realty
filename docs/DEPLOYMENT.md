@@ -9,45 +9,29 @@ Two supported targets:
 
 ## Deploying to Render
 
-Render hosts the API and the database; object storage goes to **Cloudflare R2** (Render
-has no S3). `render.yaml` in the repo root is a blueprint that provisions everything.
+`render.yaml` in the repo root is a blueprint that provisions the whole stack:
+`larkspur-db` (Postgres), `larkspur-api` (the Express API, from `server/Dockerfile`), and
+`larkspur-web` (the built SPA, static).
 
-### 1. Cloudflare R2 (object storage)
+**No object storage.** Render has no S3, so this deploy runs with `STORAGE_PROVIDER=none`:
+the public marketplace works from the seeded demo photos (committed under
+`client/public/demo/`), and the agent "upload photo" and property-document endpoints
+return `501`. To turn on real uploads, see "Enabling file uploads" below.
 
-1. Cloudflare dashboard -> R2 -> create two buckets: `larkspur-media` and `larkspur-docs`.
-2. On `larkspur-media` -> Settings -> **Public Development URL** -> enable. Copy the
-   `https://pub-xxxx.r2.dev` URL. Leave `larkspur-docs` private (documents are only ever
-   served through the access-checked `/api/documents/:id/download` route).
-3. R2 -> Manage R2 API Tokens -> create a token with **Object Read & Write** on both
-   buckets. Note the Access Key ID, Secret Access Key, and your account's S3 endpoint
-   `https://<accountid>.r2.cloudflarestorage.com`.
+### 1. Blueprint
 
-### 2. Render blueprint
-
-1. Push this repo to GitHub (already done: `origin/main`).
+1. Push this repo to GitHub (done: `origin/main`).
 2. Render dashboard -> **New -> Blueprint** -> connect the repo. Render reads `render.yaml`
-   and shows `larkspur-db`, `larkspur-api`, `larkspur-web`.
-3. Fill the prompted values:
-
-   | Service | Key | Value |
-   |---|---|---|
-   | larkspur-api | `STORAGE_ENDPOINT` | `https://<accountid>.r2.cloudflarestorage.com` |
-   | larkspur-api | `STORAGE_ACCESS_KEY` | R2 token Access Key ID |
-   | larkspur-api | `STORAGE_SECRET_KEY` | R2 token Secret Access Key |
-   | larkspur-api | `STORAGE_PUBLIC_URL` | the `https://pub-xxxx.r2.dev` URL |
-   | larkspur-api | `CLIENT_ORIGIN` | leave blank for now (step 4) |
-   | larkspur-api | `MAPBOX_TOKEN` | blank, or a real token |
-   | larkspur-web | `VITE_API_BASE_URL` | leave blank for now (step 4) |
-
-   `DATABASE_URL` and both JWT secrets are wired / generated automatically.
-4. Apply. The first deploy gives each service its URL
-   (`https://larkspur-api.onrender.com`, `https://larkspur-web.onrender.com`). Now set the
-   two cross-references and redeploy:
+   and shows the three resources. `DATABASE_URL` and both JWT secrets are wired / generated
+   automatically; leave `CLIENT_ORIGIN`, `VITE_API_BASE_URL`, and `MAPBOX_TOKEN` blank.
+3. Apply. The first deploy gives each service its URL, e.g.
+   `https://larkspur-api.onrender.com` and `https://larkspur-web.onrender.com`.
+4. Set the two cross-references, then redeploy:
    - `larkspur-api` -> `CLIENT_ORIGIN` = `https://larkspur-web.onrender.com`
    - `larkspur-web` -> `VITE_API_BASE_URL` = `https://larkspur-api.onrender.com/api`
-     (the web service must **rebuild** for Vite to pick this up).
+     (the web service must **rebuild** for Vite to bake this in).
 
-### 3. Seed roles and the first admin
+### 2. Seed roles and the first admin
 
 Migrations run on every deploy (see `dockerCommand` in `render.yaml`). Roles/permissions
 and the first administrator are a one-time manual step - open **larkspur-api -> Shell**:
@@ -57,18 +41,34 @@ node server/prisma/scripts/seed-rbac.js
 node server/prisma/scripts/create-admin.js admin@your-domain.example "a strong password" Ada Lovelace
 ```
 
-Do **not** run `npm run db:seed` - that is demo data with known passwords.
+For a populated demo (25 listings with photos, known passwords - not for real use):
+
+```bash
+npm run db:seed --workspace server
+```
+
+### Enabling file uploads (optional)
+
+Point the app at any S3-compatible bucket provider (Cloudflare R2, AWS S3, Backblaze B2):
+
+1. Create two buckets, e.g. `larkspur-media` (public) and `larkspur-docs` (private).
+   R2: enable the media bucket's **Public Development URL** and copy it.
+2. Create an API token / access key with read+write on both.
+3. On `larkspur-api`, set: `STORAGE_PROVIDER=s3`, `STORAGE_REGION=auto` (R2) or the real
+   region, `STORAGE_BUCKET`, `STORAGE_DOCS_BUCKET`, `STORAGE_ENDPOINT`
+   (`https://<accountid>.r2.cloudflarestorage.com` for R2), `STORAGE_ACCESS_KEY`,
+   `STORAGE_SECRET_KEY`, and `STORAGE_PUBLIC_URL` (the media bucket's public URL - it is
+   baked into each image row at upload time, so set it correctly before uploading).
 
 ### Notes
 
 - Free Postgres is deleted after 30 days. Change `plan: free` to `basic-256mb` (or higher)
-  in `render.yaml` for anything real, and take backups (Render does automated ones on paid
-  plans).
+  in `render.yaml` for anything real, and take backups (automated on paid plans).
 - Free web services sleep after 15 minutes idle; the first request after that is slow.
 - Rate limiting is in-memory, which is fine on a single instance. If you scale
   `larkspur-api` past one instance, move the limiter to Redis (Upstash) first.
-- `STORAGE_PUBLIC_URL` is baked into each image row's `url` at upload time, so set it
-  correctly *before* uploading property photos.
+- The brochure PDF omits the cover photo when `STORAGE_PROVIDER=none` (the demo photos
+  are served by the web app, and the API only fetches cover images from its own storage).
 
 ---
 
