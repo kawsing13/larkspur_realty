@@ -1,9 +1,14 @@
-# Render blueprint - provisions the whole stack from this repo.
+# Render blueprint - provisions the app from this repo.
 #
 # What it creates:
-#   larkspur-db    managed PostgreSQL 16
 #   larkspur-api   the Express API (built from server/Dockerfile)
 #   larkspur-web   the built React SPA, served as a static site
+#
+# DATABASE: not created here. Render allows only one free Postgres per account, so
+# this blueprint expects an external Postgres - use a free Neon project
+# (neon.tech) or Supabase, and paste its pooled connection string into
+# DATABASE_URL when Render prompts. (To use Render's own Postgres instead, add a
+# `databases:` block back and point DATABASE_URL at it with fromDatabase.)
 #
 # This deploy runs WITHOUT object storage (STORAGE_PROVIDER=none). Browsing works
 # from the seeded demo photos (committed under client/public/demo/); the agent
@@ -12,21 +17,15 @@
 # a bucket provider - see docs/DEPLOYMENT.md.
 #
 # First run:
-#   1. In Render: New -> Blueprint -> pick this repo. It reads this file.
-#   2. After the first deploy, set the two cross-reference URLs (CLIENT_ORIGIN on
+#   1. Create a Neon (or Supabase) project; copy the pooled connection string.
+#   2. In Render: New -> Blueprint -> pick this repo. Paste DATABASE_URL when asked.
+#   3. After the first deploy, set the two cross-reference URLs (CLIENT_ORIGIN on
 #      the API, VITE_API_BASE_URL on the web service) and redeploy the web service.
-#   3. Open the API service shell and run:
+#   4. Open the API service shell and run:
 #        node server/prisma/scripts/seed-rbac.js
 #        node server/prisma/scripts/create-admin.js you@example.com "a strong password" Ada Lovelace
 #      Optionally load the demo listings:  npm run db:seed --workspace server
 #      (migrations run automatically on every deploy - see dockerCommand.)
-
-databases:
-  - name: larkspur-db
-    databaseName: larkspur
-    user: larkspur
-    region: oregon # must match larkspur-api so they share the internal network
-    plan: free # free Postgres is deleted after 30 days - bump to "basic-256mb" for anything real
 
 services:
   # ---- API (Express) -------------------------------------------------------
@@ -47,10 +46,12 @@ services:
         value: production
       - key: LOG_LEVEL
         value: info
+      # Paste an external Postgres connection string. Use the DIRECT (non-pooled)
+      # URL - our server is long-running with Prisma's own pool, and `migrate
+      # deploy` needs a session connection. Neon's default string is direct and
+      # already has ?sslmode=require.
       - key: DATABASE_URL
-        fromDatabase:
-          name: larkspur-db
-          property: connectionString
+        sync: false
       - key: JWT_ACCESS_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET

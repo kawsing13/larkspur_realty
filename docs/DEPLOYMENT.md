@@ -9,29 +9,43 @@ Two supported targets:
 
 ## Deploying to Render
 
-`render.yaml` in the repo root is a blueprint that provisions the whole stack:
-`larkspur-db` (Postgres), `larkspur-api` (the Express API, from `server/Dockerfile`), and
-`larkspur-web` (the built SPA, static).
+`render.yaml` in the repo root is a blueprint that provisions `larkspur-api` (the Express
+API, from `server/Dockerfile`) and `larkspur-web` (the built SPA, static).
+
+**Database is external.** Render allows only one free Postgres per account, so the
+blueprint does not create one. Use a free **Neon** project (or Supabase / Aiven) and paste
+its connection string. (If you have no other Render free DB, you can add a `databases:`
+block back to `render.yaml` and wire `DATABASE_URL` with `fromDatabase` instead.)
 
 **No object storage.** Render has no S3, so this deploy runs with `STORAGE_PROVIDER=none`:
 the public marketplace works from the seeded demo photos (committed under
 `client/public/demo/`), and the agent "upload photo" and property-document endpoints
 return `501`. To turn on real uploads, see "Enabling file uploads" below.
 
-### 1. Blueprint
+### 1. Database (Neon)
+
+1. neon.tech -> new project (pick a region near your Render region).
+2. Copy the **direct** connection string - the default one shown, *without* `-pooler` in
+   the host. It already includes `?sslmode=require`. Use the direct URL (not the pooled
+   one): the API is a long-running server with Prisma's own connection pool, and
+   `prisma migrate deploy` needs a session-level connection.
+
+### 2. Blueprint
 
 1. Push this repo to GitHub (done: `origin/main`).
 2. Render dashboard -> **New -> Blueprint** -> connect the repo. Render reads `render.yaml`
-   and shows the three resources. `DATABASE_URL` and both JWT secrets are wired / generated
-   automatically; leave `CLIENT_ORIGIN`, `VITE_API_BASE_URL`, and `MAPBOX_TOKEN` blank.
+   and shows `larkspur-api` and `larkspur-web`. Both JWT secrets are generated
+   automatically. Fill in:
+   - `larkspur-api` -> `DATABASE_URL` = the Neon pooled string
+   - leave `CLIENT_ORIGIN` and `VITE_API_BASE_URL` blank for now (step 3)
 3. Apply. The first deploy gives each service its URL, e.g.
-   `https://larkspur-api.onrender.com` and `https://larkspur-web.onrender.com`.
-4. Set the two cross-references, then redeploy:
+   `https://larkspur-api.onrender.com` and `https://larkspur-web.onrender.com`. Set the two
+   cross-references, then redeploy:
    - `larkspur-api` -> `CLIENT_ORIGIN` = `https://larkspur-web.onrender.com`
    - `larkspur-web` -> `VITE_API_BASE_URL` = `https://larkspur-api.onrender.com/api`
      (the web service must **rebuild** for Vite to bake this in).
 
-### 2. Seed roles and the first admin
+### 3. Seed roles and the first admin
 
 Migrations run on every deploy (see `dockerCommand` in `render.yaml`). Roles/permissions
 and the first administrator are a one-time manual step - open **larkspur-api -> Shell**:
@@ -62,9 +76,9 @@ Point the app at any S3-compatible bucket provider (Cloudflare R2, AWS S3, Backb
 
 ### Notes
 
-- Free Postgres is deleted after 30 days. Change `plan: free` to `basic-256mb` (or higher)
-  in `render.yaml` for anything real, and take backups (automated on paid plans).
-- Free web services sleep after 15 minutes idle; the first request after that is slow.
+- Neon's free tier suspends the compute after ~5 minutes idle and resumes on the next
+  query (a second or two of extra latency on a cold hit). Fine for a demo.
+- Free Render web services also sleep after 15 minutes idle; the first request is slow.
 - Rate limiting is in-memory, which is fine on a single instance. If you scale
   `larkspur-api` past one instance, move the limiter to Redis (Upstash) first.
 - The brochure PDF omits the cover photo when `STORAGE_PROVIDER=none` (the demo photos
