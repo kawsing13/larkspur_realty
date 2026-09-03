@@ -29,7 +29,13 @@ const schema = z.object({
   ACCESS_TOKEN_TTL: z.string().default('15m'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
 
+  // "minio" for the local/Docker MinIO (bucket auto-created + made public-read on
+  // boot). "s3" for a managed S3-compatible service (AWS S3, Cloudflare R2): the
+  // buckets are created in the provider console, and the media bucket is made
+  // public there (or via a custom domain), so the app never touches bucket policy.
+  STORAGE_PROVIDER: z.enum(['minio', 's3']).default('minio'),
   STORAGE_ENDPOINT: z.string().default('http://localhost:9000'),
+  // R2 wants "auto"; AWS wants the real region.
   STORAGE_REGION: z.string().default('us-east-1'),
   STORAGE_ACCESS_KEY: z.string().default('rems'),
   STORAGE_SECRET_KEY: z.string().default('rems_dev_pw'),

@@ -1,0 +1,115 @@
+# Render blueprint - provisions the whole stack from this repo.
+#
+# What it creates:
+#   larkspur-db    managed PostgreSQL 16
+#   larkspur-api   the Express API (built from server/Dockerfile)
+#   larkspur-web   the built React SPA, served as a static site
+#
+# Object storage is NOT on Render (Render has no S3). Create two buckets on an
+# S3-compatible provider (Cloudflare R2 recommended) and fill the STORAGE_* values
+# marked "sync: false" below. See docs/DEPLOYMENT.md -> "Deploying to Render".
+#
+# First run:
+#   1. Create the R2 buckets + an API token (see the docs).
+#   2. In Render: New -> Blueprint -> pick this repo. It reads this file.
+#   3. Set the handful of values Render prompts for (the sync:false ones).
+#   4. After the first deploy, open the API service shell and run:
+#        node server/prisma/scripts/seed-rbac.js
+#        node server/prisma/scripts/create-admin.js you@example.com "a strong password" Ada Lovelace
+#      (migrations run automatically on every deploy - see dockerCommand.)
+
+databases:
+  - name: larkspur-db
+    databaseName: larkspur
+    user: larkspur
+    region: oregon # must match larkspur-api so they share the internal network
+    plan: free # free Postgres is deleted after 30 days - bump to "basic-256mb" for anything real
+
+services:
+  # ---- API (Express) -------------------------------------------------------
+  - type: web
+    name: larkspur-api
+    runtime: docker
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: . # the Dockerfile needs the repo root (shared npm lockfile)
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    # Apply pending migrations, then start the server. Runs on every deploy;
+    # `migrate deploy` is a no-op when nothing is pending. Kept here (not in the
+    # Dockerfile) because docker-compose.prod.yml has its own migrate step.
+    dockerCommand: sh -c "npm run db:deploy --workspace server && node server/src/server.js"
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      - key: DATABASE_URL
+        fromDatabase:
+          name: larkspur-db
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: ACCESS_TOKEN_TTL
+        value: 15m
+      - key: REFRESH_TOKEN_TTL_DAYS
+        value: "7"
+      # Render puts exactly one proxy in front of the service.
+      - key: TRUST_PROXY
+        value: "1"
+      # API and web are on different onrender.com subdomains, so the refresh
+      # cookie is cross-site and must be SameSite=None (it is Secure automatically
+      # in production).
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: ENABLE_API_DOCS
+        value: "false"
+      # The web app's origin, for CORS. After the first deploy, set this to the
+      # full URL of larkspur-web, e.g. https://larkspur-web.onrender.com
+      - key: CLIENT_ORIGIN
+        sync: false
+      # ---- object storage (Cloudflare R2 / AWS S3) ----
+      - key: STORAGE_PROVIDER
+        value: s3
+      - key: STORAGE_REGION
+        value: auto # "auto" for R2; the real region for AWS S3
+      - key: STORAGE_BUCKET
+        value: larkspur-media
+      - key: STORAGE_DOCS_BUCKET
+        value: larkspur-docs
+      # R2: https://<accountid>.r2.cloudflarestorage.com
+      - key: STORAGE_ENDPOINT
+        sync: false
+      - key: STORAGE_ACCESS_KEY
+        sync: false
+      - key: STORAGE_SECRET_KEY
+        sync: false
+      # Public base URL for the media bucket (R2 "Public Development URL" like
+      # https://pub-xxxx.r2.dev, or a custom domain). The key is appended directly.
+      - key: STORAGE_PUBLIC_URL
+        sync: false
+      - key: MAPBOX_TOKEN
+        sync: false
+
+  # ---- Frontend (static SPA) --------------------------------------------------
+  - type: web
+    name: larkspur-web
+    runtime: static
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./client/dist
+    pullRequestPreviewsEnabled: false
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Absolute URL of the API, including /api. After the first deploy set this
+      # to e.g. https://larkspur-api.onrender.com/api  (a rebuild is needed for
+      # Vite to bake it in).
+      - key: VITE_API_BASE_URL
+        sync: false
+    routes:
+      # SPA: every unknown path serves index.html so React Router can handle it.
+      - type: rewrite
+        source: /*
+        destination: /index.html

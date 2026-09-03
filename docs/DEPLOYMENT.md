@@ -1,5 +1,79 @@
 # Deployment
 
+Two supported targets:
+
+- **Render** (managed, no servers to run) - see "Deploying to Render" below. Uses `render.yaml`.
+- **Docker Compose** (one box you control) - the rest of this document.
+
+---
+
+## Deploying to Render
+
+Render hosts the API and the database; object storage goes to **Cloudflare R2** (Render
+has no S3). `render.yaml` in the repo root is a blueprint that provisions everything.
+
+### 1. Cloudflare R2 (object storage)
+
+1. Cloudflare dashboard -> R2 -> create two buckets: `larkspur-media` and `larkspur-docs`.
+2. On `larkspur-media` -> Settings -> **Public Development URL** -> enable. Copy the
+   `https://pub-xxxx.r2.dev` URL. Leave `larkspur-docs` private (documents are only ever
+   served through the access-checked `/api/documents/:id/download` route).
+3. R2 -> Manage R2 API Tokens -> create a token with **Object Read & Write** on both
+   buckets. Note the Access Key ID, Secret Access Key, and your account's S3 endpoint
+   `https://<accountid>.r2.cloudflarestorage.com`.
+
+### 2. Render blueprint
+
+1. Push this repo to GitHub (already done: `origin/main`).
+2. Render dashboard -> **New -> Blueprint** -> connect the repo. Render reads `render.yaml`
+   and shows `larkspur-db`, `larkspur-api`, `larkspur-web`.
+3. Fill the prompted values:
+
+   | Service | Key | Value |
+   |---|---|---|
+   | larkspur-api | `STORAGE_ENDPOINT` | `https://<accountid>.r2.cloudflarestorage.com` |
+   | larkspur-api | `STORAGE_ACCESS_KEY` | R2 token Access Key ID |
+   | larkspur-api | `STORAGE_SECRET_KEY` | R2 token Secret Access Key |
+   | larkspur-api | `STORAGE_PUBLIC_URL` | the `https://pub-xxxx.r2.dev` URL |
+   | larkspur-api | `CLIENT_ORIGIN` | leave blank for now (step 4) |
+   | larkspur-api | `MAPBOX_TOKEN` | blank, or a real token |
+   | larkspur-web | `VITE_API_BASE_URL` | leave blank for now (step 4) |
+
+   `DATABASE_URL` and both JWT secrets are wired / generated automatically.
+4. Apply. The first deploy gives each service its URL
+   (`https://larkspur-api.onrender.com`, `https://larkspur-web.onrender.com`). Now set the
+   two cross-references and redeploy:
+   - `larkspur-api` -> `CLIENT_ORIGIN` = `https://larkspur-web.onrender.com`
+   - `larkspur-web` -> `VITE_API_BASE_URL` = `https://larkspur-api.onrender.com/api`
+     (the web service must **rebuild** for Vite to pick this up).
+
+### 3. Seed roles and the first admin
+
+Migrations run on every deploy (see `dockerCommand` in `render.yaml`). Roles/permissions
+and the first administrator are a one-time manual step - open **larkspur-api -> Shell**:
+
+```bash
+node server/prisma/scripts/seed-rbac.js
+node server/prisma/scripts/create-admin.js admin@your-domain.example "a strong password" Ada Lovelace
+```
+
+Do **not** run `npm run db:seed` - that is demo data with known passwords.
+
+### Notes
+
+- Free Postgres is deleted after 30 days. Change `plan: free` to `basic-256mb` (or higher)
+  in `render.yaml` for anything real, and take backups (Render does automated ones on paid
+  plans).
+- Free web services sleep after 15 minutes idle; the first request after that is slow.
+- Rate limiting is in-memory, which is fine on a single instance. If you scale
+  `larkspur-api` past one instance, move the limiter to Redis (Upstash) first.
+- `STORAGE_PUBLIC_URL` is baked into each image row's `url` at upload time, so set it
+  correctly *before* uploading property photos.
+
+---
+
+## Deploying with Docker Compose
+
 The stack is three long-running containers plus a one-shot migration job, wired by
 `docker-compose.prod.yml`:
 

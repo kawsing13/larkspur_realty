@@ -12,11 +12,13 @@ import { Client } from 'minio';
 import { env } from '../config/env.js';
 
 const endpoint = new URL(env.STORAGE_ENDPOINT);
+const isMinio = env.STORAGE_PROVIDER === 'minio';
 
 export const storage = new Client({
   endPoint: endpoint.hostname,
   port: Number(endpoint.port) || (endpoint.protocol === 'https:' ? 443 : 80),
   useSSL: endpoint.protocol === 'https:',
+  region: env.STORAGE_REGION,
   accessKey: env.STORAGE_ACCESS_KEY,
   secretKey: env.STORAGE_SECRET_KEY,
 });
@@ -26,17 +28,35 @@ const DOCS_BUCKET = env.STORAGE_DOCS_BUCKET;
 
 // Public URL a browser uses to load a media object.
 export const publicUrl = (key) => {
+  // MinIO serves every bucket from one endpoint, so the bucket name is in the path.
+  // A managed S3/R2 public URL (an r2.dev address or a custom domain) already points
+  // at the media bucket, so the key goes straight on the end.
+  if (!isMinio && env.STORAGE_PUBLIC_URL) {
+    return `${env.STORAGE_PUBLIC_URL.replace(/\/$/, '')}/${key}`;
+  }
   const base = (env.STORAGE_PUBLIC_URL || env.STORAGE_ENDPOINT).replace(/\/$/, '');
   return `${base}/${MEDIA_BUCKET}/${key}`;
 };
 
-// Create both buckets if missing. Only the media bucket gets an anonymous-read
-// policy. Called once on server start; safe to re-run. Non-fatal if storage is down.
+// Make sure both buckets exist. Called once on server start; safe to re-run.
+// Non-fatal if storage is down.
+//
+// MinIO: create the buckets and open the media bucket for anonymous read so
+// <img src> works. Managed S3/R2 ("s3" provider): the buckets are created in the
+// provider console and the media bucket is made public there, so we only verify
+// they are reachable and never send a bucket policy (R2 rejects the S3 policy API).
 export const ensureBuckets = async () => {
   for (const bucket of [MEDIA_BUCKET, DOCS_BUCKET]) {
     const exists = await storage.bucketExists(bucket);
-    if (!exists) await storage.makeBucket(bucket);
+    if (!exists) {
+      if (!isMinio) {
+        throw new Error(`Bucket "${bucket}" not found - create it in your storage provider`);
+      }
+      await storage.makeBucket(bucket);
+    }
   }
+
+  if (!isMinio) return;
 
   await storage.setBucketPolicy(
     MEDIA_BUCKET,

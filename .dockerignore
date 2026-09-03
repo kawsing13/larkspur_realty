@@ -1,0 +1,17 @@
+# Keep the Docker build context small and never ship local secrets or builds.
+node_modules
+**/node_modules
+.git
+.github
+client/dist
+server/dist
+coverage
+backups
+*.log
+.env
+.env.*
+!.env.example
+!.env.production.example
+.vscode
+.idea
+.DS_Store
