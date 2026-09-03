@@ -37,10 +37,10 @@ services:
     plan: free
     region: oregon
     healthCheckPath: /health
-    # Apply pending migrations, then start the server. Runs on every deploy;
-    # `migrate deploy` is a no-op when nothing is pending. Kept here (not in the
-    # Dockerfile) because docker-compose.prod.yml has its own migrate step.
-    dockerCommand: sh -c "npm run db:deploy --workspace server && node server/src/server.js"
+    # Applies pending migrations, then starts the server (see the script).
+    # `migrate deploy` is a no-op when nothing is pending. Kept out of the
+    # Dockerfile because docker-compose.prod.yml has its own migrate step.
+    dockerCommand: sh server/scripts/start.sh
     envVars:
       - key: NODE_ENV
         value: production

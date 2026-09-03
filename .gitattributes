@@ -1,0 +1,3 @@
+# Shell scripts must stay LF so they run on Linux (Docker / Render) regardless of
+# the checkout platform.
+*.sh text eol=lf
